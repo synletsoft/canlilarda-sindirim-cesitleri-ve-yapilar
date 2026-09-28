@@ -16,8 +16,11 @@ const animals = [
 ];
 
 let game = null;
-let soundEnabled = false;
+let soundEnabled = true;
 let audioContext = null;
+let masterGain = null;
+const soundBuffers = new Map();
+const answerSoundDelayMs = 170;
 
 function shuffled(values) {
 	const result = [...values];
@@ -32,24 +35,44 @@ function signature(animal) {
 	return `${animal.stomach}/${animal.teeth}/${animal.diet}/${animal.gut}`;
 }
 
-function beep(correct) {
-	if (!soundEnabled) return;
+function getAudioContext() {
+	const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+	if (!audioContext) {
+		audioContext = new AudioContextClass();
+		masterGain = audioContext.createGain();
+		masterGain.gain.value = soundEnabled ? 1 : 0;
+		masterGain.connect(audioContext.destination);
+	}
+	return audioContext;
+}
+
+function prepareSounds(runtime) {
+	const context = getAudioContext();
+	for (const name of ["click", "true", "false", "greeting"]) {
+		const buffer = Promise.resolve(runtime.assets.getMediaFileUrl(`${name}.webm`))
+			.then(url => runtime.assets.fetchArrayBuffer(url))
+			.then(data => context.decodeAudioData(data))
+			.catch(error => {
+				console.warn(`${name}.webm yüklenemedi`, error);
+				return null;
+			});
+		soundBuffers.set(name, buffer);
+	}
+}
+
+async function playSound(name, force = false) {
+	if (!force && !soundEnabled) return;
 	try {
-		const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-		audioContext ||= new AudioContextClass();
-		void audioContext.resume();
-		const oscillator = audioContext.createOscillator();
-		const gain = audioContext.createGain();
-		oscillator.type = "sine";
-		oscillator.frequency.value = correct ? 740 : 240;
-		gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
-		gain.gain.exponentialRampToValueAtTime(0.12, audioContext.currentTime + 0.025);
-		gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + 0.26);
-		oscillator.connect(gain).connect(audioContext.destination);
-		oscillator.start();
-		oscillator.stop(audioContext.currentTime + 0.28);
+		const context = getAudioContext();
+		void context.resume();
+		const buffer = await soundBuffers.get(name);
+		if (!buffer || (!force && !soundEnabled)) return;
+		const source = context.createBufferSource();
+		source.buffer = buffer;
+		source.connect(force ? context.destination : masterGain);
+		source.start();
 	} catch (error) {
-		console.warn("Ses çalınamadı", error);
+		console.warn(`${name}.webm çalınamadı`, error);
 	}
 }
 
@@ -94,6 +117,7 @@ function startGame(runtime) {
 		complete: false,
 		token: (game?.token ?? 0) + 1
 	};
+	runtime.getInstanceByUid(20).animationFrame = soundEnabled ? 1 : 0;
 	setQuestion(runtime);
 }
 
@@ -105,13 +129,17 @@ function showFeedback(runtime, frame) {
 
 function answer(runtime, optionIndex) {
 	if (game.locked || game.menuOpen || game.complete) return;
+	void playSound("click");
 	const selected = game.options[optionIndex];
 	const correct = selected === game.order[game.round];
 	const card = runtime.getInstanceByUid(110 + optionIndex);
 	card.animationFrame = selected * 3 + (correct ? 1 : 2);
 	showFeedback(runtime, correct ? 0 : 1);
-	beep(correct);
 	const token = ++game.token;
+	setTimeout(() => {
+		if (game && game.token === token)
+			void playSound(correct ? "true" : "false");
+	}, answerSoundDelayMs);
 	if (correct) {
 		game.locked = true;
 		setTimeout(() => {
@@ -123,6 +151,7 @@ function answer(runtime, optionIndex) {
 				panel.animationFrame = 1;
 				panel.isVisible = true;
 				runtime.getInstanceByUid(131).isVisible = false;
+				void playSound("greeting");
 			} else {
 				setQuestion(runtime);
 			}
@@ -190,23 +219,41 @@ function onPointer(runtime, event) {
 	if (!game || runtime.layout.name !== "game") return;
 	if (event.pointerType === "mouse" && event.button !== 0) return;
 	const [x, y] = runtime.layout.getLayer("game").cssPxToLayer(event.clientX, event.clientY);
-	if (hit(x, y, 1420, 70, 99, 100)) return startGame(runtime);
+	if (hit(x, y, 1420, 70, 99, 100)) {
+		void playSound("click");
+		return startGame(runtime);
+	}
 	if (hit(x, y, 1528, 70, 99, 100)) {
 		soundEnabled = !soundEnabled;
+		masterGain.gain.value = soundEnabled ? 1 : 0;
 		runtime.getInstanceByUid(20).animationFrame = soundEnabled ? 1 : 0;
-		beep(true);
+		void playSound("click", true);
 		return;
 	}
-	if (hit(x, y, 1636, 70, 99, 100)) return toggleMenu(runtime);
-	if (hit(x, y, 1744, 70, 99, 100)) return void shareGame(runtime);
-	if (hit(x, y, 1852, 70, 99, 100)) return void toggleFullscreen(runtime);
+	if (hit(x, y, 1636, 70, 99, 100)) {
+		void playSound("click");
+		return toggleMenu(runtime);
+	}
+	if (hit(x, y, 1744, 70, 99, 100)) {
+		void playSound("click");
+		return void shareGame(runtime);
+	}
+	if (hit(x, y, 1852, 70, 99, 100)) {
+		void playSound("click");
+		return void toggleFullscreen(runtime);
+	}
 	if (game.complete) {
-		if (hit(x, y, 960, 721, 360, 75)) startGame(runtime);
+		if (hit(x, y, 960, 721, 360, 75)) {
+			void playSound("click");
+			startGame(runtime);
+		}
 		return;
 	}
 	if (game.menuOpen) {
-		if (hit(x, y, 960, 721, 360, 75) || !hit(x, y, 960, 540, 900, 512))
+		if (hit(x, y, 960, 721, 360, 75) || !hit(x, y, 960, 540, 900, 512)) {
+			void playSound("click");
 			toggleMenu(runtime);
+		}
 		return;
 	}
 	for (let i = 0; i < 4; ++i) {
@@ -218,6 +265,7 @@ function onPointer(runtime, event) {
 }
 
 runOnStartup(async runtime => {
+	prepareSounds(runtime);
 	runtime.addEventListener("afteranylayoutstart", event => {
 		if (event.layout.name === "game") startGame(runtime);
 	});
