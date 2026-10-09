@@ -20,7 +20,7 @@ let soundEnabled = true;
 let audioContext = null;
 let masterGain = null;
 const soundBuffers = new Map();
-const answerSoundDelayMs = 170;
+const correctAnswerDelayMs = 2000;
 
 function shuffled(values) {
 	const result = [...values];
@@ -91,27 +91,36 @@ function setQuestion(runtime) {
 	const parts = getParts(runtime);
 	const target = game.order[game.round];
 	const answer = animals[target];
-	if (game.round === 0) {
-		game.options = [0, 1, 2, 3];
-	} else {
-		const distractors = shuffled(animals.map((_, i) => i).filter(i =>
-			signature(animals[i]) !== signature(answer))).slice(0, 3);
-		game.options = shuffled([target, ...distractors]);
+	if (!game.optionsByRound[game.round]) {
+		if (game.round === 0) {
+			game.optionsByRound[game.round] = [0, 1, 2, 3];
+		} else {
+			const distractors = shuffled(animals.map((_, i) => i).filter(i =>
+				signature(animals[i]) !== signature(answer))).slice(0, 3);
+			game.optionsByRound[game.round] = shuffled([target, ...distractors]);
+		}
 	}
 	[answer.stomach, answer.teeth, answer.diet, answer.gut, 13]
 		.forEach((frame, i) => parts.featureCards[i].animationFrame = frame);
-	game.options.forEach((animalIndex, i) =>
-		parts.animalCards[i].animationFrame = animalIndex * 3);
+	game.optionsByRound[game.round].forEach((animalIndex, i) => {
+		const card = parts.animalCards[i];
+		card.animationFrame = animalIndex * 3;
+		card.width = 362;
+		card.height = 362;
+	});
+	runtime.getInstanceByUid(140).isVisible = game.round > 0;
+	runtime.getInstanceByUid(141).isVisible = game.round < animals.length - 1;
 	parts.feedback.isVisible = false;
 	parts.panel.isVisible = false;
-	game.locked = false;
+	game.locked = game.solved[game.round];
 }
 
 function startGame(runtime) {
 	game = {
 		order: [2, ...shuffled(animals.map((_, i) => i).filter(i => i !== 2))],
 		round: 0,
-		options: [],
+		optionsByRound: [],
+		solved: Array(animals.length).fill(false),
 		locked: false,
 		menuOpen: false,
 		complete: false,
@@ -121,48 +130,54 @@ function startGame(runtime) {
 	setQuestion(runtime);
 }
 
-function showFeedback(runtime, frame) {
-	const toast = runtime.getInstanceByUid(131);
-	toast.animationFrame = frame;
-	toast.isVisible = true;
-}
-
 function answer(runtime, optionIndex) {
 	if (game.locked || game.menuOpen || game.complete) return;
-	void playSound("click");
-	const selected = game.options[optionIndex];
+	const selected = game.optionsByRound[game.round][optionIndex];
 	const correct = selected === game.order[game.round];
+	void playSound(correct ? "true" : "false");
 	const card = runtime.getInstanceByUid(110 + optionIndex);
 	card.animationFrame = selected * 3 + (correct ? 1 : 2);
-	showFeedback(runtime, correct ? 0 : 1);
 	const token = ++game.token;
-	setTimeout(() => {
-		if (game && game.token === token)
-			void playSound(correct ? "true" : "false");
-	}, answerSoundDelayMs);
 	if (correct) {
+		game.solved[game.round] = true;
 		game.locked = true;
-		setTimeout(() => {
-			if (!game || game.token !== token) return;
-			game.round++;
-			if (game.round === animals.length) {
-				game.complete = true;
+		game.complete = game.solved.every(Boolean);
+		if (game.complete) {
+			setTimeout(() => {
+				if (!game || game.token !== token) return;
 				const panel = runtime.getInstanceByUid(130);
 				panel.animationFrame = 1;
 				panel.isVisible = true;
-				runtime.getInstanceByUid(131).isVisible = false;
 				void playSound("greeting");
-			} else {
-				setQuestion(runtime);
-			}
-		}, 1100);
+			}, correctAnswerDelayMs);
+		} else {
+			setTimeout(() => {
+				if (!game || game.token !== token) return;
+				for (let offset = 1; offset < animals.length; offset++) {
+					const nextRound = (game.round + offset) % animals.length;
+					if (game.solved[nextRound]) continue;
+					game.round = nextRound;
+					setQuestion(runtime);
+					return;
+				}
+			}, correctAnswerDelayMs);
+		}
 	} else {
 		setTimeout(() => {
 			if (!game || game.token !== token) return;
 			card.animationFrame = selected * 3;
-			runtime.getInstanceByUid(131).isVisible = false;
 		}, 900);
 	}
+}
+
+function changeQuestion(runtime, direction) {
+	if (game.menuOpen || game.complete) return;
+	const nextRound = game.round + direction;
+	if (nextRound < 0 || nextRound >= animals.length) return;
+	void playSound("click");
+	game.token++;
+	game.round = nextRound;
+	setQuestion(runtime);
 }
 
 function toggleMenu(runtime) {
@@ -174,7 +189,7 @@ function toggleMenu(runtime) {
 	runtime.getInstanceByUid(131).isVisible = false;
 }
 
-async function shareGame(runtime) {
+async function shareGame() {
 	const payload = {
 		title: "Canlılarda Sindirim Çeşitleri ve Yapıları",
 		text: "Sindirim özelliklerine bakarak canlıyı bul!",
@@ -183,15 +198,10 @@ async function shareGame(runtime) {
 	try {
 		if (navigator.clipboard && navigator.maxTouchPoints === 0) {
 			await navigator.clipboard.writeText(`${payload.text} ${payload.url}`);
-			showFeedback(runtime, 2);
-			setTimeout(() => {
-				if (game) runtime.getInstanceByUid(131).isVisible = false;
-			}, 1800);
 		} else if (navigator.share) {
 			await navigator.share(payload);
 		} else {
 			await navigator.clipboard.writeText(`${payload.text} ${payload.url}`);
-			showFeedback(runtime, 2);
 		}
 	} catch (error) {
 		if (error?.name !== "AbortError") console.warn("Paylaşım yapılamadı", error);
@@ -236,14 +246,14 @@ function onPointer(runtime, event) {
 	}
 	if (hit(x, y, 1744, 70, 99, 100)) {
 		void playSound("click");
-		return void shareGame(runtime);
+		return void shareGame();
 	}
 	if (hit(x, y, 1852, 70, 99, 100)) {
 		void playSound("click");
 		return void toggleFullscreen(runtime);
 	}
 	if (game.complete) {
-		if (hit(x, y, 960, 721, 360, 75)) {
+		if (runtime.getInstanceByUid(130).isVisible && hit(x, y, 960, 721, 360, 75)) {
 			void playSound("click");
 			startGame(runtime);
 		}
@@ -256,6 +266,8 @@ function onPointer(runtime, event) {
 		}
 		return;
 	}
+	if (hit(x, y, 95, 813, 84, 84)) return changeQuestion(runtime, -1);
+	if (hit(x, y, 1825, 813, 84, 84)) return changeQuestion(runtime, 1);
 	for (let i = 0; i < 4; ++i) {
 		if (hit(x, y, 382 + 385 * i, 813, 362, 362)) {
 			answer(runtime, i);

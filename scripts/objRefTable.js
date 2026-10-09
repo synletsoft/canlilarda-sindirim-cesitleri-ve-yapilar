@@ -14,7 +14,8 @@ self.C3_JsPropNameTable = [
 	{animalCard: 0},
 	{menuBtn: 0},
 	{panel: 0},
-	{feedback: 0}
+	{feedback: 0},
+	{navArrow: 0}
 ];
 
 self.InstanceType = {
@@ -27,5 +28,6 @@ self.InstanceType = {
 	animalCard: class extends self.ISpriteInstance {},
 	menuBtn: class extends self.ISpriteInstance {},
 	panel: class extends self.ISpriteInstance {},
-	feedback: class extends self.ISpriteInstance {}
+	feedback: class extends self.ISpriteInstance {},
+	navArrow: class extends self.ISpriteInstance {}
 }
